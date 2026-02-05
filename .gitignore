@@ -1,0 +1,14 @@
+bin/
+obj/
+*.zip
+logs/
+publish/
+*.dll
+*.exe
+*.pdb
+.vs/
+.vscode/
+*.user
+*.suo
+*.cache
+*.log

@@ -1,0 +1,35 @@
+### Test Settlement with Updated Encryption
+### This should now work with the same encryption pattern as KeyBettingService
+
+### Test Settlement Processing
+POST http://localhost:5000/api/v1/settlement/process
+Content-Type: application/json
+
+{
+  "transactionReference": "TEST_SETTLE_001",
+  "accountNumber": "1234567890",
+  "amount": 1000.00,
+  "paymentGateway": "REMITA"
+}
+
+### Test with different payment gateway
+POST http://localhost:5000/api/v1/settlement/process
+Content-Type: application/json
+
+{
+  "transactionReference": "TEST_SETTLE_002", 
+  "accountNumber": "9876543210",
+  "amount": 2500.00,
+  "paymentGateway": "INTERSWITCH"
+}
+
+### Test with RevPay
+POST http://localhost:5000/api/v1/settlement/process
+Content-Type: application/json
+
+{
+  "transactionReference": "TEST_SETTLE_003",
+  "accountNumber": "5555666677",
+  "amount": 750.00,
+  "paymentGateway": "REVPAY"
+}
