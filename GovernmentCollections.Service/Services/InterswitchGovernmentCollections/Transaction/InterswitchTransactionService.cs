@@ -26,6 +26,61 @@ public class InterswitchTransactionService
         _authService = authService;
     }
 
+    private void AddRequiredHeaders(string token, string terminalId)
+    {
+        _httpClient.DefaultRequestHeaders.Clear();
+        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+        
+        // Add required Interswitch headers
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var nonce = Guid.NewGuid().ToString("N");
+        
+        _httpClient.DefaultRequestHeaders.Add("Timestamp", timestamp);
+        _httpClient.DefaultRequestHeaders.Add("Nonce", nonce);
+        
+        // Extract values from JWT token
+        var tokenClaims = ExtractTokenClaims(token);
+        if (!string.IsNullOrEmpty(tokenClaims.MerchantCode))
+            _httpClient.DefaultRequestHeaders.Add("MerchantCode", tokenClaims.MerchantCode);
+        if (!string.IsNullOrEmpty(tokenClaims.InstitutionId))
+            _httpClient.DefaultRequestHeaders.Add("InstitutionId", tokenClaims.InstitutionId);
+        if (!string.IsNullOrEmpty(tokenClaims.PayableId))
+            _httpClient.DefaultRequestHeaders.Add("PayableId", tokenClaims.PayableId);
+        if (!string.IsNullOrEmpty(tokenClaims.RequestorId))
+            _httpClient.DefaultRequestHeaders.Add("RequestorId", tokenClaims.RequestorId);
+    }
+
+    private (string MerchantCode, string InstitutionId, string PayableId, string RequestorId) ExtractTokenClaims(string token)
+    {
+        try
+        {
+            var tokenParts = token.Split('.');
+            if (tokenParts.Length >= 2)
+            {
+                var payload = tokenParts[1];
+                while (payload.Length % 4 != 0)
+                    payload += "=";
+                
+                var jsonBytes = Convert.FromBase64String(payload);
+                var jsonString = Encoding.UTF8.GetString(jsonBytes);
+                var tokenClaims = JsonSerializer.Deserialize<JsonElement>(jsonString);
+                
+                var merchantCode = tokenClaims.TryGetProperty("merchant_code", out var mc) ? mc.GetString() : "";
+                var institutionId = tokenClaims.TryGetProperty("institution_id", out var ii) ? ii.GetString() : "";
+                var payableId = tokenClaims.TryGetProperty("payable_id", out var pi) ? pi.GetString() : "";
+                var requestorId = tokenClaims.TryGetProperty("requestor_id", out var ri) ? ri.GetString() : "";
+                
+                return (merchantCode ?? "", institutionId ?? "", payableId ?? "", requestorId ?? "");
+            }
+        }
+        catch
+        {
+            // Ignore token parsing errors
+        }
+        return ("", "", "", "");
+    }
+
     public async Task<InterswitchBillInquiryResponse> BillInquiryAsync(InterswitchBillInquiryRequest request)
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
@@ -35,11 +90,9 @@ public class InterswitchTransactionService
         {
             var token = await _authService.GetValidTokenAsync();
             var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/billinquiry";
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/billinquiry";
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            AddRequiredHeaders(token, terminalId);
 
             var json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -77,11 +130,9 @@ public class InterswitchTransactionService
         {
             var token = await _authService.GetValidTokenAsync();
             var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/Transactions";
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/Transactions";
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            AddRequiredHeaders(token, terminalId);
 
             request.TerminalId = terminalId;
             var json = JsonSerializer.Serialize(request);
@@ -129,11 +180,9 @@ public class InterswitchTransactionService
         {
             var token = await _authService.GetValidTokenAsync();
             var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/Transactions/validatecustomers";
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/Transactions/validatecustomers";
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            AddRequiredHeaders(token, terminalId);
             _httpClient.DefaultRequestHeaders.ExpectContinue = false;
 
             request.TerminalId = terminalId;
@@ -184,11 +233,9 @@ public class InterswitchTransactionService
         {
             var token = await _authService.GetValidTokenAsync();
             var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/Transactions?requestRef={requestReference}";
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/Transactions?requestRef={requestReference}";
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            AddRequiredHeaders(token, terminalId);
 
             _logger.LogInformation("[OUTBOUND-{RequestId}] VerifyTransactionAsync: GET {Url}", requestId, requestUrl);
             
@@ -223,11 +270,9 @@ public class InterswitchTransactionService
         {
             var token = await _authService.GetValidTokenAsync();
             var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/transactions?userId={userId}&page={page}&pageSize={pageSize}";
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/transactions?userId={userId}&page={page}&pageSize={pageSize}";
             
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            AddRequiredHeaders(token, terminalId);
 
             _logger.LogInformation("[OUTBOUND-{RequestId}] GetTransactionHistoryAsync: GET {Url}", requestId, requestUrl);
             

@@ -16,11 +16,28 @@ public static class InterswitchServiceExtensions
         services.AddHttpClient<InterswitchAuthService>(client =>
         {
             client.Timeout = TimeSpan.FromSeconds(30);
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
         });
         
         services.AddHttpClient<InterswitchTransactionService>(client =>
         {
             client.Timeout = TimeSpan.FromSeconds(60);
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        });
+        
+        services.AddHttpClient<BillPayment.InterswitchBillPaymentService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(45);
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
         });
 
         services.AddHttpClient<SettlementService>(client =>

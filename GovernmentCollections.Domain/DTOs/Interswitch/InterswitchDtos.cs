@@ -106,8 +106,14 @@ public class InterswitchBillerList
 
 public class InterswitchServicesResponse
 {
-    [JsonPropertyName("BillerList")]
-    public InterswitchBillerList BillerList { get; set; } = new();
+    [JsonPropertyName("BillerCategories")]
+    public List<InterswitchCategory> BillerCategories { get; set; } = new();
+    
+    [JsonPropertyName("ResponseCode")]
+    public string ResponseCode { get; set; } = string.Empty;
+    
+    [JsonPropertyName("ResponseCodeGrouping")]
+    public string ResponseCodeGrouping { get; set; } = string.Empty;
 }
 
 public class InterswitchPaymentRequest
@@ -462,6 +468,18 @@ public static class InterswitchValidationHelper
 
         return (true, "Validation successful");
     }
+}
+
+public class InterswitchBillerListResponse
+{
+    [JsonPropertyName("BillerList")]
+    public InterswitchBillerList BillerList { get; set; } = new();
+    
+    [JsonPropertyName("ResponseCode")]
+    public string ResponseCode { get; set; } = string.Empty;
+    
+    [JsonPropertyName("ResponseCodeGrouping")]
+    public string ResponseCodeGrouping { get; set; } = string.Empty;
 }
 
 public class CustomerValidationRequest

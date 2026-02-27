@@ -46,7 +46,7 @@ public class RemitaPaymentService : IRemitaPaymentService
         };
         
         var baseUrl = _configuration["Remita:BaseUrl"];
-        var initUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/initiate";
+        var initUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/initiate";
         
         var json = JsonSerializer.Serialize(initRequest);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -72,12 +72,12 @@ public class RemitaPaymentService : IRemitaPaymentService
             }
         };
         
-        var payUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/pay";
+        var payUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/pay";
         var payJson = JsonSerializer.Serialize(payRequest);
         var payContent = new StringContent(payJson, Encoding.UTF8, "application/json");
         await _httpClient.PostAsync(payUrl, payContent);
         
-        var queryUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/query/{transactionRef}";
+        var queryUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/query/{transactionRef}";
         var queryResponse = await _httpClient.GetAsync(queryUrl);
         var queryResponseContent = await queryResponse.Content.ReadAsStringAsync();
         
@@ -170,7 +170,7 @@ public class RemitaPaymentService : IRemitaPaymentService
         try
         {
             var baseUrl = _configuration["Remita:BaseUrl"];
-            var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/rpgsvc/v3/rpg/banks";
+            var requestUrl = $"{baseUrl}/api/v1/send/api/rpgsvc/v3/rpg/banks";
             
             _logger.LogInformation("[OUTBOUND-{RequestId}] GetActiveBanksAsync: POST {Url}", requestId, requestUrl);
             
@@ -201,10 +201,10 @@ public class RemitaPaymentService : IRemitaPaymentService
         try
         {
             var baseUrl = _configuration["Remita:BaseUrl"];
-            var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/paymentnotification";
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/paymentnotification";
             
             var json = JsonSerializer.Serialize(request);
-            _logger.LogInformation("[OUTBOUND-{RequestId}] ActivateMandateAsync: POST {Url} | Request: {Request}", requestId, requestUrl, json);
+            _logger.LogInformation("[OUTBOUND-{RequestId}] ActivateMandateAsync: POST {Url}", requestId, requestUrl);
             
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await _httpClient.PostAsync(requestUrl, content);
@@ -214,25 +214,13 @@ public class RemitaPaymentService : IRemitaPaymentService
             _logger.LogInformation("[INBOUND-{RequestId}] ActivateMandateAsync: Status={StatusCode} | Duration={Duration}ms | Response: {Response}", 
                 requestId, response.StatusCode, duration, responseContent);
             
-            if (!response.IsSuccessStatusCode)
-            {
-                return new { status = "01", message = "Payment processing failed", data = responseContent };
-            }
-            
-            try
-            {
-                return JsonSerializer.Deserialize<object>(responseContent) ?? new { status = "01", message = "Invalid response format", data = responseContent };
-            }
-            catch (JsonException)
-            {
-                return new { status = "01", message = "Invalid response format", data = responseContent };
-            }
+            return new { Status = response.IsSuccessStatusCode ? "SUCCESS" : "ERROR", Data = JsonSerializer.Deserialize<object>(responseContent) ?? new object() };
         }
         catch (Exception ex)
         {
             var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
             _logger.LogError(ex, "[ERROR-{RequestId}] ActivateMandateAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
-            return new { status = "99", message = "Service temporarily unavailable", data = ex.Message };
+            throw;
         }
     }
 
@@ -243,45 +231,25 @@ public class RemitaPaymentService : IRemitaPaymentService
         
         try
         {
-            var token = await _authService.GetAccessTokenForBaseUrl2Async();
-            var baseUrl = _configuration["Remita:BaseUrl2"];
-            var publicKey2 = _configuration["Remita:PublicKey2"];
-            var requestUrl = $"{baseUrl}/services/connect-gateway/api/v1/integration/lookup/{rrr}";
+            var baseUrl = _configuration["Remita:BaseUrl"];
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/rrr/{rrr}";
             
             _logger.LogInformation("[OUTBOUND-{RequestId}] GetRrrDetailsAsync: GET {Url}", requestId, requestUrl);
-            _logger.LogInformation("[DEBUG-{RequestId}] Using token: {Token}", requestId, token?.Substring(0, 20) + "...");
-            _logger.LogInformation("[DEBUG-{RequestId}] Using PublicKey2: {PublicKey}", requestId, publicKey2);
             
-            using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            
-            // Only add the public key as a specific header that might be expected
-            if (!string.IsNullOrEmpty(publicKey2))
-            {
-                request.Headers.Add("publicKey", publicKey2);
-            }
-            
-            var response = await _httpClient.SendAsync(request);
+            var response = await _httpClient.GetAsync(requestUrl);
             var responseContent = await response.Content.ReadAsStringAsync();
             var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
             
             _logger.LogInformation("[INBOUND-{RequestId}] GetRrrDetailsAsync: Status={StatusCode} | Duration={Duration}ms | Response: {Response}", 
                 requestId, response.StatusCode, duration, responseContent);
             
-            var result = JsonSerializer.Deserialize<dynamic>(responseContent);
-            
-            if (result?.GetProperty("status").GetString() == "96")
-            {
-                return new { status = "01", message = "RRR not found or invalid. Please check the RRR number and try again.", data = (object?)null };
-            }
-            
-            return result ?? new object();
+            return new { Status = response.IsSuccessStatusCode ? "SUCCESS" : "ERROR", Data = JsonSerializer.Deserialize<object>(responseContent) ?? new object() };
         }
         catch (Exception ex)
         {
             var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
             _logger.LogError(ex, "[ERROR-{RequestId}] GetRrrDetailsAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
-            return new { status = "99", message = "Unable to retrieve RRR details at this time. Please try again later.", data = (object?)null };
+            throw;
         }
     }
 
@@ -294,10 +262,10 @@ public class RemitaPaymentService : IRemitaPaymentService
         try
         {
             var baseUrl = _configuration["Remita:BaseUrl"];
-            var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/pay";
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/pay";
             
             var json = JsonSerializer.Serialize(request);
-            _logger.LogInformation("[OUTBOUND-{RequestId}] ActivateRrrPaymentAsync: POST {Url} | Request: {Request}", requestId, requestUrl, json);
+            _logger.LogInformation("[OUTBOUND-{RequestId}] ActivateRrrPaymentAsync: POST {Url}", requestId, requestUrl);
             
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await _httpClient.PostAsync(requestUrl, content);
@@ -307,7 +275,7 @@ public class RemitaPaymentService : IRemitaPaymentService
             _logger.LogInformation("[INBOUND-{RequestId}] ActivateRrrPaymentAsync: Status={StatusCode} | Duration={Duration}ms | Response: {Response}", 
                 requestId, response.StatusCode, duration, responseContent);
             
-            return JsonSerializer.Deserialize<object>(responseContent) ?? new object();
+            return new { Status = response.IsSuccessStatusCode ? "SUCCESS" : "ERROR", Data = JsonSerializer.Deserialize<object>(responseContent) ?? new object() };
         }
         catch (Exception ex)
         {
@@ -324,7 +292,6 @@ public class RemitaPaymentService : IRemitaPaymentService
         
         try
         {
-            // Validate PIN first for RRR payments too
             if (!string.IsNullOrEmpty(request.Pin) && !string.IsNullOrEmpty(request.Username))
             {
                 var isPinValid = await _pinValidationService.ValidatePinAsync(request.Username, request.Pin);
@@ -332,38 +299,14 @@ public class RemitaPaymentService : IRemitaPaymentService
                 {
                     return new { status = "03", message = "Invalid PIN", data = (object?)null };
                 }
-                
-                var isFullyValid = await _pinValidationService.ValidateWithEnforcementAsync(request.Username, request.Pin, request.SecondFa, request.SecondFaType);
-                if (!isFullyValid)
-                {
-                    var errorMessage = string.Equals(request.SecondFaType, "TOKEN", StringComparison.OrdinalIgnoreCase) 
-                        ? "Invalid or expired TOKEN" 
-                        : "Invalid or expired OTP";
-                    return new { status = "05", message = errorMessage, data = (object?)null };
-                }
             }
             
-            await _authService.SetAuthHeaderForBaseUrl2Async(_httpClient);
-            var baseUrl = _configuration["Remita:BaseUrl2"];
-            var requestUrl = $"{baseUrl}/services/connect-gateway/api/v1/integration/process/payment";
+            await _authService.SetAuthHeaderAsync(_httpClient);
+            var baseUrl = _configuration["Remita:BaseUrl"];
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/pay";
             
-            var paymentRequest = new
-            {
-                rrr = request.Rrr,
-                transactionRef = request.TransactionRef,
-                amount = request.Amount,
-                channel = request.Channel,
-                accountNumber = request.AccountNumber,
-                username = request.Username,
-                pin = request.Pin,
-                metadata = request.Metadata,
-                secondFa = request.SecondFa,
-                secondFaType = request.SecondFaType,
-                enforce2FA = request.Enforce2FA
-            };
-            
-            var json = JsonSerializer.Serialize(paymentRequest);
-            _logger.LogInformation("[OUTBOUND-{RequestId}] ProcessRrrPaymentAsync: POST {Url} | Request: {Request}", requestId, requestUrl, json);
+            var json = JsonSerializer.Serialize(request);
+            _logger.LogInformation("[OUTBOUND-{RequestId}] ProcessRrrPaymentAsync: POST {Url}", requestId, requestUrl);
             
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await _httpClient.PostAsync(requestUrl, content);
@@ -373,9 +316,9 @@ public class RemitaPaymentService : IRemitaPaymentService
             _logger.LogInformation("[INBOUND-{RequestId}] ProcessRrrPaymentAsync: Status={StatusCode} | Duration={Duration}ms | Response: {Response}", 
                 requestId, response.StatusCode, duration, responseContent);
             
-            var result = JsonSerializer.Deserialize<dynamic>(responseContent);
+            var result = JsonSerializer.Deserialize<object>(responseContent) ?? new object();
             
-            if (response.IsSuccessStatusCode && string.Equals(result?.GetProperty("status").GetString(), "00", StringComparison.OrdinalIgnoreCase))
+            if (response.IsSuccessStatusCode)
             {
                 var settlementResult = await _settlementService.ProcessSettlementAsync(
                     request.Rrr,
@@ -386,7 +329,7 @@ public class RemitaPaymentService : IRemitaPaymentService
                 _logger.LogInformation("[SETTLEMENT-{RequestId}] Settlement result: {Status} - {Message}", requestId, settlementResult.ResponseStatus, settlementResult.ResponseMessage);
             }
             
-            return result ?? new object();
+            return result;
         }
         catch (Exception ex)
         {

@@ -16,16 +16,16 @@ public class RemitaSettings
 
 public class InterswitchSettings
 {
-    public string BaseUrl { get; set; } = "https://passport.k8.isw.la";
-    public string ServicesUrl { get; set; } = "https://qa.interswitchng.com";
-    public string UserName { get; set; } = "IKIA72C65D005F93F30E573EFEAC04FA6DD9E4D344B1";
-    public string Password { get; set; } = "YZMqZezsltpSPNb4+49PGeP7lYkzKn1a5SaVSyzKOiI=";
-    public string MerchantCode { get; set; } = "QTELL";
-    public string RequestorId { get; set; } = "00110919551";
-    public string TerminalId { get; set; } = "3PBL0001";
-    public string PayableId { get; set; } = "109";
-    public string InstitutionId { get; set; } = "12899";
-    public int TokenExpiryBuffer { get; set; } = 300; // 5 minutes buffer
+    public string BaseUrl { get; set; } = string.Empty;
+    public string ServicesUrl { get; set; } = string.Empty;
+    public string UserName { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+    public string MerchantCode { get; set; } = string.Empty;
+    public string RequestorId { get; set; } = string.Empty;
+    public string TerminalId { get; set; } = string.Empty;
+    public string PayableId { get; set; } = string.Empty;
+    public string InstitutionId { get; set; } = string.Empty;
+    public int TokenExpiryBuffer { get; set; } = 300;
 }
 
 public class BuyPowerSettings

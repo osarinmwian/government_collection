@@ -2,11 +2,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using System.Net.Http.Json;
 using GovernmentCollections.Domain.DTOs.Interswitch;
 using GovernmentCollections.Domain.DTOs.Settlement;
 using GovernmentCollections.Domain.Settings;
 using GovernmentCollections.Service.Services.Settlement;
-using GovernmentCollections.Service.Services.InterswitchGovernmentCollections;
 
 namespace GovernmentCollections.Service.Services.InterswitchGovernmentCollections.BillPayment;
 
@@ -36,170 +36,173 @@ public class InterswitchBillPaymentService : IInterswitchBillPaymentService
         _settlementService = settlementService;
     }
 
-    public async Task<List<InterswitchBiller>> GetGovernmentBillersAsync()
+    public async Task<InterswitchServicesResponse> GetGovernmentCategoriesAsync()
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
         var startTime = DateTime.UtcNow;
-        
-        try
+        var maxRetries = 3;
+        var retryCount = 0;
+        var baseDelay = TimeSpan.FromSeconds(2);
+
+        while (retryCount < maxRetries)
         {
-            if (_cache.TryGetValue(BILLERS_CACHE_KEY, out List<InterswitchBiller>? cachedBillers) && cachedBillers != null)
+            try
             {
-                return cachedBillers;
-            }
+                var token = await _authService.GetValidTokenAsync();
+                var terminalId = await _authService.GetTerminalIdAsync();
+                var requestUrl = $"{_settings.ServicesUrl}/api/v5/services/categories";
 
-            var token = await _authService.GetValidTokenAsync();
-            var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/services";
-            
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+                _logger.LogInformation("[DEBUG-{RequestId}] Attempt {Attempt} | Token: {Token} | TerminalId: {TerminalId}", 
+                    requestId, retryCount + 1, token?.Substring(0, Math.Min(10, token.Length)) + "...", terminalId);
 
-            _logger.LogInformation("[OUTBOUND-{RequestId}] GetGovernmentBillersAsync: GET {Url}", requestId, requestUrl);
-            
-            var response = await _httpClient.GetAsync(requestUrl);
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            
-            _logger.LogInformation("[INBOUND-{RequestId}] GetGovernmentBillersAsync: Status={StatusCode} | Duration={Duration}ms", 
-                requestId, response.StatusCode, duration);
-            
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogError("[ERROR-{RequestId}] Failed to get billers. Status: {StatusCode}", requestId, response.StatusCode);
+                using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+                request.Headers.Add("Authorization", $"Bearer {token}");
+                if (!string.IsNullOrEmpty(terminalId))
+                    request.Headers.Add("TerminalId", terminalId);
+
+                _logger.LogInformation("[HEADERS-{RequestId}] Authorization: Bearer {TokenPrefix}..., TerminalID: {TerminalId}", 
+                    requestId, token?.Substring(0, Math.Min(20, token.Length)), terminalId);
+
+                _logger.LogInformation("[OUTBOUND-{RequestId}] GetGovernmentCategoriesAsync: GET {Url}", requestId, requestUrl);
+
+                var response = await _httpClient.SendAsync(request);
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
+
+                _logger.LogInformation("[INBOUND-{RequestId}] GetGovernmentCategoriesAsync: Status={StatusCode} | Duration={Duration}ms",
+                    requestId, response.StatusCode, duration);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    _logger.LogError("[AUTH-ERROR-{RequestId}] 401 Response: {ResponseContent}", requestId, responseContent);
+                    _logger.LogError("[AUTH-ERROR-{RequestId}] Request URL: {RequestUrl}", requestId, requestUrl);
+                    _logger.LogError("[AUTH-ERROR-{RequestId}] All Headers: {Headers}", requestId, string.Join(", ", request.Headers.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}")));
+                    
+                    if (retryCount < maxRetries - 1)
+                    {
+                        _logger.LogWarning("[RETRY-{RequestId}] 401 Unauthorized, clearing token and retrying...", requestId);
+                        _authService.ClearCachedToken();
+                        retryCount++;
+                        await Task.Delay(TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, retryCount)));
+                        continue;
+                    }
+                }
+
                 response.EnsureSuccessStatusCode();
-            }
 
-            var servicesResponse = JsonSerializer.Deserialize<InterswitchServicesResponse>(responseContent);
+                var servicesResponse = JsonSerializer.Deserialize<InterswitchServicesResponse>(responseContent, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
 
-            if (servicesResponse?.BillerList?.Categories == null)
-            {
-                return new List<InterswitchBiller>();
-            }
-
-            var governmentKeywords = new[] { 
-                "Tax", "Revenue", "Government", "State", "Federal", "Ministry", "Agency",
-                "FIRS", "IRS", "Custom", "FRSC", "Road Safety", "Immigration", 
-                "Police", "Court", "Judiciary", "Council", "Authority", "Commission",
-                "Treasury", "Finance", "Budget", "Levy", "Fee", "Permit", "License"
-            };
-            
-            var governmentBillers = new List<InterswitchBiller>();
-
-            foreach (var category in servicesResponse.BillerList.Categories)
-            {
-                // Include billers that match government keywords
-                var govBillers = category.Billers.Where(b => 
-                    governmentKeywords.Any(keyword => 
-                        b.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
-                        b.Narration.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
-                        b.ShortName.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                    ) ||
-                    // Include specific government category names
-                    category.Name.Equals("State Payments", StringComparison.OrdinalIgnoreCase) ||
-                    category.Name.Equals("Tax Payments", StringComparison.OrdinalIgnoreCase)
-                ).ToList();
+                _logger.LogInformation("[RAW-RESPONSE-{RequestId}] Response content: {ResponseContent}", requestId, responseContent);
+                _logger.LogInformation("[PARSED-RESPONSE-{RequestId}] Categories count: {Count}", requestId, servicesResponse?.BillerCategories?.Count ?? 0);
                 
-                governmentBillers.AddRange(govBillers);
+                _logger.LogInformation("[SUCCESS-{RequestId}] Successfully retrieved service response", requestId);
+                return servicesResponse ?? new InterswitchServicesResponse();
             }
+            catch (HttpRequestException ex) when ((ex.Message.Contains("401") || ex.Message.Contains("forcibly closed") || ex.Message.Contains("connection was closed")) && retryCount < maxRetries - 1)
+            {
+                _logger.LogWarning("[RETRY-{RequestId}] Network/Auth exception, clearing token and retrying... Error: {Error}", requestId, ex.Message);
+                _authService.ClearCachedToken();
+                retryCount++;
+                await Task.Delay(TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, retryCount)));
+            }
+            catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException && retryCount < maxRetries - 1)
+            {
+                _logger.LogWarning("[RETRY-{RequestId}] Timeout exception, retrying... Error: {Error}", requestId, ex.Message);
+                retryCount++;
+                await Task.Delay(TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, retryCount)));
+            }
+            catch (Exception ex)
+            {
+                var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
+                _logger.LogError(ex, "[ERROR-{RequestId}] GetGovernmentCategoriesAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
+                throw;
+            }
+        }
 
-            _cache.Set(BILLERS_CACHE_KEY, governmentBillers, TimeSpan.FromHours(1));
-            
-            _logger.LogInformation("[SUCCESS-{RequestId}] Retrieved {Count} government billers", requestId, governmentBillers.Count);
-            return governmentBillers;
-        }
-        catch (Exception ex)
-        {
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            _logger.LogError(ex, "[ERROR-{RequestId}] GetGovernmentBillersAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
-            throw;
-        }
+        throw new InvalidOperationException($"Failed to get government categories after {maxRetries} attempts");
     }
 
     public async Task<List<InterswitchBiller>> GetBillersByCategoryAsync(int categoryId)
     {
-        var requestId = Guid.NewGuid().ToString("N")[..8];
-        var startTime = DateTime.UtcNow;
+        var response = await GetGovernmentCategoriesAsync();
         
-        try
-        {
-            var token = await _authService.GetValidTokenAsync();
-            var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/services?categoryId={categoryId}";
-            
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
-
-            _logger.LogInformation("[OUTBOUND-{RequestId}] GetBillersByCategoryAsync: GET {Url}", requestId, requestUrl);
-            
-            var response = await _httpClient.GetAsync(requestUrl);
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            
-            _logger.LogInformation("[INBOUND-{RequestId}] GetBillersByCategoryAsync: Status={StatusCode} | Duration={Duration}ms", 
-                requestId, response.StatusCode, duration);
-            
-            response.EnsureSuccessStatusCode();
-
-            var servicesResponse = JsonSerializer.Deserialize<InterswitchServicesResponse>(responseContent);
-            return servicesResponse?.BillerList?.Categories?.FirstOrDefault()?.Billers ?? new List<InterswitchBiller>();
-        }
-        catch (Exception ex)
-        {
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            _logger.LogError(ex, "[ERROR-{RequestId}] GetBillersByCategoryAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
-            throw;
-        }
+            _logger.LogInformation("[OUTBOUND-RESPONSE]", response);
+        var category = response?.BillerCategories?.FirstOrDefault(c => c.Id == categoryId);
+        return category?.Billers ?? new List<InterswitchBiller>();
     }
 
-    public async Task<List<InterswitchCategory>> GetGovernmentCategoriesAsync()
+    public async Task<List<InterswitchBiller>> GetGovernmentBillersAsync()
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
-        var startTime = DateTime.UtcNow;
+        if (_cache.TryGetValue(BILLERS_CACHE_KEY, out List<InterswitchBiller>? cachedBillers) && cachedBillers != null)
+        {
+            return cachedBillers;
+        }
+
+        var response = await GetGovernmentCategoriesAsync();
+        var governmentCategories = response.BillerCategories?
+            .Where(c => c.Name.Contains("Government", StringComparison.OrdinalIgnoreCase) || 
+                       c.Name.Contains("State", StringComparison.OrdinalIgnoreCase) ||
+                       c.Name.Contains("Tax", StringComparison.OrdinalIgnoreCase))
+            .ToList() ?? new List<InterswitchCategory>();
+
+        var allBillers = new List<InterswitchBiller>();
         
+        foreach (var category in governmentCategories)
+        {
+            var categoryBillers = await GetBillersForCategoryAsync(category.Id);
+            allBillers.AddRange(categoryBillers);
+        }
+
+        if (allBillers.Any())
+        {
+            _cache.Set(BILLERS_CACHE_KEY, allBillers, TimeSpan.FromHours(1));
+        }
+
+        return allBillers;
+    }
+
+    private async Task<List<InterswitchBiller>> GetBillersForCategoryAsync(int categoryId)
+    {
+        var requestId = Guid.NewGuid().ToString("N")[..8];
         try
         {
             var token = await _authService.GetValidTokenAsync();
             var terminalId = await _authService.GetTerminalIdAsync();
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/services/categories";
-            
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/services?categoryId={categoryId}";
 
-            _logger.LogInformation("[OUTBOUND-{RequestId}] GetGovernmentCategoriesAsync: GET {Url}", requestId, requestUrl);
-            
-            var response = await _httpClient.GetAsync(requestUrl);
+            using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+            request.Headers.Add("Authorization", $"Bearer {token}");
+            if (!string.IsNullOrEmpty(terminalId))
+                request.Headers.Add("TerminalId", terminalId);
+
+            _logger.LogInformation("[OUTBOUND-{RequestId}] GetBillersForCategoryAsync: GET {Url}", requestId, requestUrl);
+
+            var response = await _httpClient.SendAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            
-            _logger.LogInformation("[INBOUND-{RequestId}] GetGovernmentCategoriesAsync: Status={StatusCode} | Duration={Duration}ms", 
-                requestId, response.StatusCode, duration);
-            
-            response.EnsureSuccessStatusCode();
 
-            var servicesResponse = JsonSerializer.Deserialize<InterswitchServicesResponse>(responseContent);
+            _logger.LogInformation("[INBOUND-{RequestId}] GetBillersForCategoryAsync: Status={StatusCode}", requestId, response.StatusCode);
 
-            if (servicesResponse?.BillerList?.Categories == null)
+            if (!response.IsSuccessStatusCode)
             {
-                return new List<InterswitchCategory>();
+                _logger.LogWarning("[WARNING-{RequestId}] Failed to get billers for category {CategoryId}: {Response}", requestId, categoryId, responseContent);
+                return new List<InterswitchBiller>();
             }
 
-            var strictGovernmentCategories = new[] { "State Payments", "Tax Payments" };
-            var governmentCategories = servicesResponse.BillerList.Categories
-                .Where(c => strictGovernmentCategories.Contains(c.Name, StringComparer.OrdinalIgnoreCase))
-                .ToList();
+            var billersResponse = JsonSerializer.Deserialize<InterswitchServicesResponse>(responseContent, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
 
-            _logger.LogInformation("[SUCCESS-{RequestId}] Retrieved {Count} government categories", requestId, governmentCategories.Count);
-            return governmentCategories;
+            return billersResponse?.BillerCategories?.FirstOrDefault()?.Billers ?? new List<InterswitchBiller>();
         }
         catch (Exception ex)
         {
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            _logger.LogError(ex, "[ERROR-{RequestId}] GetGovernmentCategoriesAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
-            throw;
+            _logger.LogError(ex, "[ERROR-{RequestId}] GetBillersForCategoryAsync: CategoryId={CategoryId} | Exception: {Message}", requestId, categoryId, ex.Message);
+            return new List<InterswitchBiller>();
         }
     }
 
@@ -207,45 +210,50 @@ public class InterswitchBillPaymentService : IInterswitchBillPaymentService
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
         var startTime = DateTime.UtcNow;
-        
+
         try
         {
             var token = await _authService.GetValidTokenAsync();
-            var authResponse = await _authService.AuthenticateAsync();
-            var terminalId = authResponse.TerminalId;
-            
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/services/options?serviceId={serviceId}";
-            
+            var terminalId = await _authService.GetTerminalIdAsync();
+
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/services/options?serviceId={serviceId}";
+
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
             _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+            
+            // Add required Interswitch headers
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            var nonce = Guid.NewGuid().ToString("N");
+            
+            _httpClient.DefaultRequestHeaders.Add("Timestamp", timestamp);
+            _httpClient.DefaultRequestHeaders.Add("Nonce", nonce);
+            _httpClient.DefaultRequestHeaders.Add("MerchantCode", _settings.MerchantCode);
+            _httpClient.DefaultRequestHeaders.Add("InstitutionId", _settings.InstitutionId);
+            _httpClient.DefaultRequestHeaders.Add("PayableId", _settings.PayableId);
+            
+            if (!string.IsNullOrEmpty(_settings.RequestorId))
+                _httpClient.DefaultRequestHeaders.Add("RequestorId", _settings.RequestorId);
 
             _logger.LogInformation("[OUTBOUND-{RequestId}] GetServiceOptionsAsync: GET {Url}", requestId, requestUrl);
-            
+
             var response = await _httpClient.GetAsync(requestUrl);
             var responseContent = await response.Content.ReadAsStringAsync();
             var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            
-            _logger.LogInformation("[INBOUND-{RequestId}] GetServiceOptionsAsync: Status={StatusCode} | Duration={Duration}ms | Response: {Response}", 
-                requestId, response.StatusCode, duration, responseContent);
-            
-            // Parse the Interswitch service options response format even for non-success status
-            var serviceOptionsResponse = JsonSerializer.Deserialize<InterswitchServiceOptionsResponse>(responseContent);
-            
-            if (!response.IsSuccessStatusCode || serviceOptionsResponse?.PaymentItems == null || serviceOptionsResponse.PaymentItems.Count == 0)
+
+            var serviceOptionsResponse = JsonSerializer.Deserialize<InterswitchServiceOptionsResponse>(responseContent, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (!response.IsSuccessStatusCode || serviceOptionsResponse?.PaymentItems == null)
             {
-                _logger.LogWarning("[WARNING-{RequestId}] No payment items found - Status: {StatusCode}, ResponseCode: {ResponseCode}", 
-                    requestId, response.StatusCode, serviceOptionsResponse?.ResponseCode);
                 return new List<InterswitchPaymentItem>();
             }
-            
-            _logger.LogInformation("[SUCCESS-{RequestId}] Retrieved {Count} payment items", requestId, serviceOptionsResponse.PaymentItems.Count);
+
             return serviceOptionsResponse.PaymentItems;
         }
         catch (Exception ex)
         {
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            _logger.LogError(ex, "[ERROR-{RequestId}] GetServiceOptionsAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
+            _logger.LogError(ex, "[ERROR-{RequestId}] GetServiceOptionsAsync: {Message}", requestId, ex.Message);
             throw;
         }
     }
@@ -254,15 +262,13 @@ public class InterswitchBillPaymentService : IInterswitchBillPaymentService
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
         var startTime = DateTime.UtcNow;
-        
+
         try
         {
             var token = await _authService.GetValidTokenAsync();
-            var authResponse = await _authService.AuthenticateAsync();
-            var terminalId = authResponse.TerminalId;
-            
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/Transactions";
-            
+            var terminalId = await _authService.GetTerminalIdAsync();
+            var requestUrl = $"{_settings.ServicesUrl}/api/v5/Transactions";
+
             var transactionData = new
             {
                 TerminalId = terminalId,
@@ -273,149 +279,97 @@ public class InterswitchBillPaymentService : IInterswitchBillPaymentService
                 amount = request.Amount.ToString(),
                 requestReference = request.RequestReference
             };
-            
+
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
             _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+            
+            // Add required Interswitch headers
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            var nonce = Guid.NewGuid().ToString("N");
+            
+            _httpClient.DefaultRequestHeaders.Add("Timestamp", timestamp);
+            _httpClient.DefaultRequestHeaders.Add("Nonce", nonce);
+            _httpClient.DefaultRequestHeaders.Add("MerchantCode", _settings.MerchantCode);
+            _httpClient.DefaultRequestHeaders.Add("InstitutionId", _settings.InstitutionId);
+            _httpClient.DefaultRequestHeaders.Add("PayableId", _settings.PayableId);
+            
+            if (!string.IsNullOrEmpty(_settings.RequestorId))
+                _httpClient.DefaultRequestHeaders.Add("RequestorId", _settings.RequestorId);
 
-            var jsonContent = JsonSerializer.Serialize(transactionData);
-            var content = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+            var response = await _httpClient.PostAsJsonAsync(requestUrl, transactionData);
+            var paymentResponse = await response.Content.ReadFromJsonAsync<InterswitchPaymentResponse>() ?? new InterswitchPaymentResponse();
 
-            _logger.LogInformation("[OUTBOUND-{RequestId}] ProcessTransactionAsync: POST {Url}", requestId, requestUrl);
-            
-            var response = await _httpClient.PostAsync(requestUrl, content);
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            
-            _logger.LogInformation("[INBOUND-{RequestId}] ProcessTransactionAsync: Status={StatusCode} | Duration={Duration}ms", 
-                requestId, response.StatusCode, duration);
-            
-            response.EnsureSuccessStatusCode();
-
-            var paymentResponse = JsonSerializer.Deserialize<InterswitchPaymentResponse>(responseContent) ?? new InterswitchPaymentResponse();
-            
-            // Process settlement if transaction was successful
             if (paymentResponse.ResponseCode == "00")
             {
-                var settlementResult = await _settlementService.ProcessSettlementAsync(
-                    request.RequestReference,
-                    request.CustomerId,
-                    request.Amount,
-                    $"Interswitch Payment - {request.PaymentCode}",
-                    "INTERSWITCH");
-                _logger.LogInformation("[SETTLEMENT-{RequestId}] Settlement result: {Status} - {Message}", requestId, settlementResult.ResponseStatus, settlementResult.ResponseMessage);
-                
-                // Add settlement reference to response if successful
-                // Settlement processed successfully - log the reference
-                if (settlementResult.ResponseStatus)
-                {
-                    _logger.LogInformation("[SETTLEMENT-{RequestId}] Settlement reference: {SettlementRef}", requestId, settlementResult.ResponseData);
-                }
+                await _settlementService.ProcessSettlementAsync(request.RequestReference, request.CustomerId, request.Amount, $"Interswitch - {request.PaymentCode}", "INTERSWITCH");
             }
-            
-            _logger.LogInformation("[SUCCESS-{RequestId}] Transaction processed: {TransactionRef}", requestId, paymentResponse.TransactionRef);
+
             return paymentResponse;
         }
         catch (Exception ex)
         {
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            _logger.LogError(ex, "[ERROR-{RequestId}] ProcessTransactionAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
+            _logger.LogError(ex, "[ERROR-{RequestId}] ProcessTransactionAsync: {Message}", requestId, ex.Message);
             throw;
         }
     }
 
     public async Task<InterswitchPaymentResponse> GetTransactionStatusAsync(string requestReference)
     {
-        var requestId = Guid.NewGuid().ToString("N")[..8];
-        var startTime = DateTime.UtcNow;
+        var token = await _authService.GetValidTokenAsync();
+        var terminalId = await _authService.GetTerminalIdAsync();
+        var requestUrl = $"{_settings.ServicesUrl}/api/v5/Transactions?requestRef={requestReference}";
+
+        _httpClient.DefaultRequestHeaders.Clear();
+        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+        _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
         
-        try
-        {
-            var token = await _authService.GetValidTokenAsync();
-            var authResponse = await _authService.AuthenticateAsync();
-            var terminalId = authResponse.TerminalId;
-            
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/Transactions?requestRef={requestReference}";
-            
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+        // Add required Interswitch headers
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var nonce = Guid.NewGuid().ToString("N");
+        
+        _httpClient.DefaultRequestHeaders.Add("Timestamp", timestamp);
+        _httpClient.DefaultRequestHeaders.Add("Nonce", nonce);
+        _httpClient.DefaultRequestHeaders.Add("MerchantCode", _settings.MerchantCode);
+        _httpClient.DefaultRequestHeaders.Add("InstitutionId", _settings.InstitutionId);
+        _httpClient.DefaultRequestHeaders.Add("PayableId", _settings.PayableId);
+        
+        if (!string.IsNullOrEmpty(_settings.RequestorId))
+            _httpClient.DefaultRequestHeaders.Add("RequestorId", _settings.RequestorId);
 
-            _logger.LogInformation("[OUTBOUND-{RequestId}] GetTransactionStatusAsync: GET {Url}", requestId, requestUrl);
-            
-            var response = await _httpClient.GetAsync(requestUrl);
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            
-            _logger.LogInformation("[INBOUND-{RequestId}] GetTransactionStatusAsync: Status={StatusCode} | Duration={Duration}ms", 
-                requestId, response.StatusCode, duration);
-            
-            response.EnsureSuccessStatusCode();
-
-            var paymentResponse = JsonSerializer.Deserialize<InterswitchPaymentResponse>(responseContent) ?? new InterswitchPaymentResponse();
-            
-            _logger.LogInformation("[SUCCESS-{RequestId}] Transaction status retrieved: {Status}", requestId, paymentResponse.ResponseCode);
-            return paymentResponse;
-        }
-        catch (Exception ex)
-        {
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            _logger.LogError(ex, "[ERROR-{RequestId}] GetTransactionStatusAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
-            throw;
-        }
+        var response = await _httpClient.GetAsync(requestUrl);
+        return await response.Content.ReadFromJsonAsync<InterswitchPaymentResponse>() ?? new InterswitchPaymentResponse();
     }
 
     public async Task<InterswitchCustomerValidationResponse> ValidateCustomersAsync(InterswitchCustomerValidationBatchRequest request)
     {
-        var requestId = Guid.NewGuid().ToString("N")[..8];
-        var startTime = DateTime.UtcNow;
+        var token = await _authService.GetValidTokenAsync();
+        var terminalId = await _authService.GetTerminalIdAsync();
+        var requestUrl = $"{_settings.ServicesUrl}/api/v5/Transactions/validatecustomers";
+
+        var validationData = new { customers = request.Customers, TerminalId = terminalId };
+
+        _httpClient.DefaultRequestHeaders.Clear();
+        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+        _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
         
-        try
-        {
-            var token = await _authService.GetValidTokenAsync();
-            var authResponse = await _authService.AuthenticateAsync();
-            var terminalId = authResponse.TerminalId;
-            
-            var requestUrl = $"{_settings.ServicesUrl}/quicktellerservice/api/v5/Transactions/validatecustomers";
-            
-            var validationData = new
-            {
-                customers = request.Customers.Select(c => new
-                {
-                    PaymentCode = c.PaymentCode,
-                    CustomerId = c.CustomerId
-                }).ToList(),
-                TerminalId = terminalId
-            };
-            
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-            _httpClient.DefaultRequestHeaders.Add("TerminalID", terminalId);
+        // Add required Interswitch headers
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var nonce = Guid.NewGuid().ToString("N");
+        
+        _httpClient.DefaultRequestHeaders.Add("Timestamp", timestamp);
+        _httpClient.DefaultRequestHeaders.Add("Nonce", nonce);
+        _httpClient.DefaultRequestHeaders.Add("MerchantCode", _settings.MerchantCode);
+        _httpClient.DefaultRequestHeaders.Add("InstitutionId", _settings.InstitutionId);
+        _httpClient.DefaultRequestHeaders.Add("PayableId", _settings.PayableId);
+        
+        if (!string.IsNullOrEmpty(_settings.RequestorId))
+            _httpClient.DefaultRequestHeaders.Add("RequestorId", _settings.RequestorId);
 
-            var jsonContent = JsonSerializer.Serialize(validationData);
-            var content = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
-
-            _logger.LogInformation("[OUTBOUND-{RequestId}] ValidateCustomersAsync: POST {Url}", requestId, requestUrl);
-            
-            var response = await _httpClient.PostAsync(requestUrl, content);
-            var responseContent = await response.Content.ReadAsStringAsync();
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            
-            _logger.LogInformation("[INBOUND-{RequestId}] ValidateCustomersAsync: Status={StatusCode} | Duration={Duration}ms", 
-                requestId, response.StatusCode, duration);
-            
-            response.EnsureSuccessStatusCode();
-
-            var validationResponse = JsonSerializer.Deserialize<InterswitchCustomerValidationResponse>(responseContent) ?? new InterswitchCustomerValidationResponse();
-            
-            _logger.LogInformation("[SUCCESS-{RequestId}] Customer validation completed", requestId);
-            return validationResponse;
-        }
-        catch (Exception ex)
-        {
-            var duration = DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
-            _logger.LogError(ex, "[ERROR-{RequestId}] ValidateCustomersAsync: Duration={Duration}ms | Exception: {Message}", requestId, duration, ex.Message);
-            throw;
-        }
+        var response = await _httpClient.PostAsJsonAsync(requestUrl, validationData);
+        return await response.Content.ReadFromJsonAsync<InterswitchCustomerValidationResponse>() ?? new InterswitchCustomerValidationResponse();
     }
 }

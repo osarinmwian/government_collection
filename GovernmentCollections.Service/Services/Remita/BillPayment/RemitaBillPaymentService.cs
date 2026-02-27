@@ -14,7 +14,11 @@ public class RemitaBillPaymentService : IRemitaBillPaymentService
     private readonly ILogger<RemitaBillPaymentService> _logger;
     private readonly IRemitaAuthenticationService _authService;
 
-    public RemitaBillPaymentService(HttpClient httpClient, IConfiguration configuration, ILogger<RemitaBillPaymentService> logger, IRemitaAuthenticationService authService)
+    public RemitaBillPaymentService(
+        HttpClient httpClient, 
+        IConfiguration configuration, 
+        ILogger<RemitaBillPaymentService> logger, 
+        IRemitaAuthenticationService authService)
     {
         _httpClient = httpClient;
         _configuration = configuration;
@@ -32,16 +36,16 @@ public class RemitaBillPaymentService : IRemitaBillPaymentService
                 _logger.LogWarning("Remita:BaseUrl not configured, returning empty list");
                 return new List<RemitaBillerDto>();
             }
-            
-            var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/billers";
+
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/billers";
             _logger.LogInformation("Fetching billers from: {RequestUrl}", requestUrl);
-            
+
             await _authService.SetAuthHeaderAsync(_httpClient);
             var response = await _httpClient.GetAsync(requestUrl);
             var responseContent = await response.Content.ReadAsStringAsync();
-            
+
             _logger.LogInformation("Billers API response: Status={StatusCode}, Content={Content}", response.StatusCode, responseContent);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 var billersResponse = JsonSerializer.Deserialize<RemitaBillersResponse>(responseContent);
@@ -53,53 +57,56 @@ public class RemitaBillPaymentService : IRemitaBillPaymentService
                     Category = b.CategoryName
                 }).ToList() ?? new List<RemitaBillerDto>();
             }
-            
-            _logger.LogWarning("Billers API failed with status {StatusCode}, returning mock data", response.StatusCode);
-            return GetMockBillers();
+
+            _logger.LogWarning("Billers API failed with status {StatusCode}. No mock data returned.", response.StatusCode);
+            return new List<RemitaBillerDto>();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error fetching billers, returning mock data");
-            return GetMockBillers();
+            _logger.LogError(ex, "Error fetching billers from Remita API.");
+            return new List<RemitaBillerDto>();
         }
-    }
-    
-    private List<RemitaBillerDto> GetMockBillers()
-    {
-        return new List<RemitaBillerDto>
-        {
-            new RemitaBillerDto { BillerId = "FIRS001", Name = "Federal Inland Revenue Service", Logo = "", Category = "Tax" },
-            new RemitaBillerDto { BillerId = "LASIRS001", Name = "Lagos State Internal Revenue Service", Logo = "", Category = "Tax" },
-            new RemitaBillerDto { BillerId = "CUSTOMS001", Name = "Nigeria Customs Service", Logo = "", Category = "Customs" },
-            new RemitaBillerDto { BillerId = "FRSC001", Name = "Federal Road Safety Corps", Logo = "", Category = "License" }
-        };
     }
 
     public async Task<RemitaBillerDetailsDto> GetBillerByIdAsync(string billerId)
     {
-        var baseUrl = _configuration["Remita:BaseUrl"];
-        var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/{billerId}/products";
-        
-        await _authService.SetAuthHeaderAsync(_httpClient);
-        var response = await _httpClient.GetAsync(requestUrl);
-        var responseContent = await response.Content.ReadAsStringAsync();
-        
-        if (response.IsSuccessStatusCode)
+        try
         {
-            var productsResponse = JsonSerializer.Deserialize<RemitaBillerProductsResponse>(responseContent);
+            var baseUrl = _configuration["Remita:BaseUrl"];
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/{billerId}/products";
+
+            await _authService.SetAuthHeaderAsync(_httpClient);
+            var response = await _httpClient.GetAsync(requestUrl);
+            var responseContent = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                var productsResponse = JsonSerializer.Deserialize<RemitaBillerProductsResponse>(responseContent);
+                return new RemitaBillerDetailsDto
+                {
+                    Status = productsResponse?.Status ?? "00",
+                    Message = productsResponse?.Message ?? "Request processed successfully",
+                    Data = productsResponse?.Data ?? new RemitaBillerProductsData()
+                };
+            }
+
             return new RemitaBillerDetailsDto
             {
-                Status = productsResponse?.Status ?? "00",
-                Message = productsResponse?.Message ?? "Request processed successfully",
-                Data = productsResponse?.Data ?? new RemitaBillerProductsData()
+                Status = "01",
+                Message = $"Failed to retrieve biller products. API Status: {response.StatusCode}",
+                Data = new RemitaBillerProductsData()
             };
         }
-        return new RemitaBillerDetailsDto
+        catch (Exception ex)
         {
-            Status = "01",
-            Message = "Failed to retrieve biller products",
-            Data = new RemitaBillerProductsData()
-        };
+            _logger.LogError(ex, "Error retrieving biller products for BillerId: {BillerId}", billerId);
+            return new RemitaBillerDetailsDto
+            {
+                Status = "01",
+                Message = "Internal error retrieving biller products",
+                Data = new RemitaBillerProductsData()
+            };
+        }
     }
 
     public async Task<RemitaValidateCustomerResponse> ValidateCustomerAsync(RemitaValidateCustomerRequest request)
@@ -107,21 +114,21 @@ public class RemitaBillPaymentService : IRemitaBillPaymentService
         try
         {
             var baseUrl = _configuration["Remita:BaseUrl"];
-            var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/customer/validation";
-            
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/customer/validation";
+
             await _authService.SetAuthHeaderAsync(_httpClient);
-            
+
             var json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            
+
             _logger.LogInformation("Sending validation request to Remita: {RequestUrl}, Body: {RequestBody}", requestUrl, json);
-            
+
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var response = await _httpClient.PostAsync(requestUrl, content, cts.Token);
             var responseContent = await response.Content.ReadAsStringAsync();
-            
+
             _logger.LogInformation("Remita validation response: Status={StatusCode}, Body={ResponseBody}", response.StatusCode, responseContent);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 var validationResponse = JsonSerializer.Deserialize<RemitaCustomerValidationResponse>(responseContent);
@@ -132,11 +139,11 @@ public class RemitaBillPaymentService : IRemitaBillPaymentService
                     Data = validationResponse?.Data
                 };
             }
-            
+
             _logger.LogWarning("Remita API returned non-success status: {StatusCode}, Response: {ResponseContent}", response.StatusCode, responseContent);
-            return new RemitaValidateCustomerResponse 
-            { 
-                Status = "01", 
+            return new RemitaValidateCustomerResponse
+            {
+                Status = "01",
                 Message = $"Validation failed - HTTP {response.StatusCode}",
                 Data = null
             };
@@ -144,9 +151,9 @@ public class RemitaBillPaymentService : IRemitaBillPaymentService
         catch (TaskCanceledException)
         {
             _logger.LogWarning("Remita validation request timed out");
-            return new RemitaValidateCustomerResponse 
-            { 
-                Status = "99", 
+            return new RemitaValidateCustomerResponse
+            {
+                Status = "99",
                 Message = "Request timeout",
                 Data = null
             };
@@ -154,9 +161,9 @@ public class RemitaBillPaymentService : IRemitaBillPaymentService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error validating customer with Remita");
-            return new RemitaValidateCustomerResponse 
-            { 
-                Status = "01", 
+            return new RemitaValidateCustomerResponse
+            {
+                Status = "01",
                 Message = "Validation failed - Internal error",
                 Data = null
             };

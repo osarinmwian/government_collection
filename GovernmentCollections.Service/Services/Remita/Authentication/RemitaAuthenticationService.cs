@@ -26,7 +26,7 @@ public class RemitaAuthenticationService : IRemitaAuthenticationService
         var username = _configuration["Remita:Username"];
         var password = _configuration["Remita:Password"];
         var baseUrl = _configuration["Remita:BaseUrl"] ?? "http://localhost:5000";
-        var tokenUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/uaasvc/uaa/token";
+        var tokenUrl = $"{baseUrl}/api/v1/send/api/uaasvc/uaa/token";
 
         var authRequest = new { username, password };
         var json = JsonSerializer.Serialize(authRequest);

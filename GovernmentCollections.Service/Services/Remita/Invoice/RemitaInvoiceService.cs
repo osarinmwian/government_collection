@@ -35,7 +35,7 @@ public class RemitaInvoiceService : IRemitaInvoiceService
         var json = JsonSerializer.Serialize(request);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        var response = await _httpClient.PostAsync("/remita/exapp/api/v1/send/api/echannelsvc/merchant/api/paymentinit", content);
+        var response = await _httpClient.PostAsync("/api/v1/send/api/echannelsvc/merchant/api/paymentinit", content);
         var responseContent = await response.Content.ReadAsStringAsync();
 
         return JsonSerializer.Deserialize<RemitaInvoiceResponse>(responseContent) ?? new RemitaInvoiceResponse();
@@ -53,7 +53,7 @@ public class RemitaInvoiceService : IRemitaInvoiceService
         _httpClient.DefaultRequestHeaders.Add("TIMESTAMP", timestamp);
         _httpClient.DefaultRequestHeaders.Add("TXN_HASH", hash);
 
-        var response = await _httpClient.GetAsync($"/remita/exapp/api/v1/send/api/echannelsvc/merchant/api/paymentstatus/{rrr}");
+        var response = await _httpClient.GetAsync($"/api/v1/send/api/echannelsvc/merchant/api/paymentstatus/{rrr}");
         var responseContent = await response.Content.ReadAsStringAsync();
 
         return JsonSerializer.Deserialize<RemitaPaymentStatusResponse>(responseContent) ?? new RemitaPaymentStatusResponse();

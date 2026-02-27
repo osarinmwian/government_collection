@@ -262,6 +262,12 @@ public class InterswitchGovernmentCollectionsController : BaseController
     {
         _logger.LogInformation("ProcessTransaction called from OmniChannel - RequestRef: {RequestReference}, Amount: {Amount}", request?.RequestReference, request?.Amount);
         
+        if (request == null)
+        {
+            _logger.LogWarning("ProcessTransaction - Request is null");
+            return BadRequest(new { Status = "ERROR", Message = "Request cannot be null" });
+        }
+        
         if (!ModelState.IsValid)
         {
             _logger.LogWarning("ProcessTransaction - Invalid model state: {@ModelState}", ModelState);
@@ -313,7 +319,7 @@ public class InterswitchGovernmentCollectionsController : BaseController
             Data = result
         };
         
-        _logger.LogInformation("Returning transaction result to OmniChannel - RequestRef: {RequestReference}", request?.RequestReference);
+        _logger.LogInformation("Returning transaction result to OmniChannel - RequestRef: {RequestReference}", request.RequestReference);
         return Ok(response);
     }
 
@@ -338,6 +344,12 @@ public class InterswitchGovernmentCollectionsController : BaseController
     public async Task<IActionResult> ValidateCustomer([FromBody] CustomerValidationRequest request)
     {
         _logger.LogInformation("ValidateCustomer endpoint called from OmniChannel - CustomerId: {CustomerId}, PaymentCode: {PaymentCode}", request?.CustomerId, request?.PaymentCode);
+        
+        if (request == null)
+        {
+            _logger.LogWarning("ValidateCustomer - Request is null");
+            return BadRequest(new { Status = "ERROR", Message = "Request cannot be null" });
+        }
         
         if (!ModelState.IsValid)
         {
@@ -380,7 +392,7 @@ public class InterswitchGovernmentCollectionsController : BaseController
                 Data = result
             };
             
-            _logger.LogInformation("Returning validation result to OmniChannel - CustomerId: {CustomerId}", request?.CustomerId);
+            _logger.LogInformation("Returning validation result to OmniChannel - CustomerId: {CustomerId}", request.CustomerId);
             return Ok(response);
         }
         catch (Exception ex)

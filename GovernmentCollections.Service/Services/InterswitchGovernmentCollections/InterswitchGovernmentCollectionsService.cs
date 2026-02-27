@@ -58,7 +58,8 @@ public class InterswitchGovernmentCollectionsService : IInterswitchGovernmentCol
 
     public async Task<List<InterswitchCategory>> GetGovernmentCategoriesAsync()
     {
-        return await _billPaymentService.GetGovernmentCategoriesAsync();
+        var response = await _billPaymentService.GetGovernmentCategoriesAsync();
+        return response?.BillerCategories ?? new List<InterswitchCategory>();
     }
 
     public async Task<List<InterswitchPaymentItem>> GetServiceOptionsAsync(int serviceId)

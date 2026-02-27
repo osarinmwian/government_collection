@@ -35,7 +35,7 @@ public class RemitaTransactionService : IRemitaTransactionService
         try
         {
             var baseUrl = _configuration["Remita:BaseUrl"];
-            var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/initiate";
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/initiate";
             
             _logger.LogInformation("Setting authentication header for Remita request");
             await _authService.SetAuthHeaderAsync(_httpClient);
@@ -82,7 +82,7 @@ public class RemitaTransactionService : IRemitaTransactionService
         try
         {
             var baseUrl = _configuration["Remita:BaseUrl"];
-            var requestUrl = $"{baseUrl}/remita/exapp/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/paymentnotification";
+            var requestUrl = $"{baseUrl}/api/v1/send/api/bgatesvc/v3/billpayment/biller/transaction/paymentnotification";
             
             await _authService.SetAuthHeaderAsync(_httpClient);
             
@@ -222,7 +222,7 @@ public class RemitaTransactionService : IRemitaTransactionService
             }
             
             var result = JsonSerializer.Deserialize<RemitaQueryResponse>(responseContent);
-            return (object?)(result ?? new RemitaQueryResponse { Status = "99", Message = "Empty response", Data = null });
+            return result ?? new RemitaQueryResponse { Status = "99", Message = "Empty response", Data = null };
         }
         catch (JsonException ex)
         {
