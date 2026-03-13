@@ -127,11 +127,34 @@ public class InterswitchBillPaymentService : IInterswitchBillPaymentService
 
     public async Task<List<InterswitchBiller>> GetBillersByCategoryAsync(int categoryId)
     {
+        var requestId = Guid.NewGuid().ToString("N")[..8];
+        _logger.LogInformation("[START-{RequestId}] GetBillersByCategoryAsync called with CategoryId: {CategoryId}", requestId, categoryId);
+        
+        // First try the new endpoint
+        var billersFromNewEndpoint = await GetBillersForCategoryAsync(categoryId);
+        _logger.LogInformation("[NEW-ENDPOINT-{RequestId}] GetBillersForCategoryAsync returned {Count} billers", requestId, billersFromNewEndpoint.Count);
+        
+        if (billersFromNewEndpoint.Any())
+        {
+            _logger.LogInformation("[SUCCESS-{RequestId}] Returning {Count} billers from new endpoint", requestId, billersFromNewEndpoint.Count);
+            return billersFromNewEndpoint;
+        }
+        
+        // Fallback to old method to maintain compatibility
+        _logger.LogInformation("[FALLBACK-{RequestId}] New endpoint returned empty, trying old method", requestId);
         var response = await GetGovernmentCategoriesAsync();
         
-            _logger.LogInformation("[OUTBOUND-RESPONSE]", response);
+        _logger.LogInformation("[OLD-METHOD-{RequestId}] GetGovernmentCategoriesAsync returned response with {Count} categories", 
+            requestId, response?.BillerCategories?.Count ?? 0);
+        
         var category = response?.BillerCategories?.FirstOrDefault(c => c.Id == categoryId);
-        return category?.Billers ?? new List<InterswitchBiller>();
+        _logger.LogInformation("[OLD-METHOD-{RequestId}] Found category: {CategoryFound}, Billers count: {BillersCount}", 
+            requestId, category != null, category?.Billers?.Count ?? 0);
+        
+        var result = category?.Billers ?? new List<InterswitchBiller>();
+        _logger.LogInformation("[END-{RequestId}] GetBillersByCategoryAsync returning {Count} billers", requestId, result.Count);
+        
+        return result;
     }
 
     public async Task<List<InterswitchBiller>> GetGovernmentBillersAsync()
@@ -168,11 +191,16 @@ public class InterswitchBillPaymentService : IInterswitchBillPaymentService
     private async Task<List<InterswitchBiller>> GetBillersForCategoryAsync(int categoryId)
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
+        _logger.LogInformation("[START-{RequestId}] GetBillersForCategoryAsync called with CategoryId: {CategoryId}", requestId, categoryId);
+        
         try
         {
             var token = await _authService.GetValidTokenAsync();
             var terminalId = await _authService.GetTerminalIdAsync();
             var requestUrl = $"{_settings.ServicesUrl}/api/v5/services?categoryId={categoryId}";
+
+            _logger.LogInformation("[AUTH-{RequestId}] Token: {TokenPrefix}..., TerminalId: {TerminalId}", 
+                requestId, token?.Substring(0, Math.Min(10, token.Length)), terminalId);
 
             using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
             request.Headers.Add("Authorization", $"Bearer {token}");
@@ -184,20 +212,56 @@ public class InterswitchBillPaymentService : IInterswitchBillPaymentService
             var response = await _httpClient.SendAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
 
-            _logger.LogInformation("[INBOUND-{RequestId}] GetBillersForCategoryAsync: Status={StatusCode}", requestId, response.StatusCode);
+            _logger.LogInformation("[INBOUND-{RequestId}] GetBillersForCategoryAsync: Status={StatusCode}, ContentLength={ContentLength}", 
+                requestId, response.StatusCode, responseContent?.Length ?? 0);
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("[WARNING-{RequestId}] Failed to get billers for category {CategoryId}: {Response}", requestId, categoryId, responseContent);
+                _logger.LogWarning("[WARNING-{RequestId}] Failed to get billers for category {CategoryId}: Status={StatusCode}, Response={Response}", 
+                    requestId, categoryId, response.StatusCode, responseContent);
                 return new List<InterswitchBiller>();
             }
 
-            var billersResponse = JsonSerializer.Deserialize<InterswitchServicesResponse>(responseContent, new JsonSerializerOptions
+            _logger.LogInformation("[RAW-RESPONSE-{RequestId}] Response content: {ResponseContent}", requestId, responseContent);
+
+            var billersResponse = JsonSerializer.Deserialize<InterswitchBillerListResponse>(responseContent, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
 
-            return billersResponse?.BillerCategories?.FirstOrDefault()?.Billers ?? new List<InterswitchBiller>();
+            _logger.LogInformation("[DESERIALIZATION-{RequestId}] BillerResponse null: {ResponseNull}, BillerList null: {BillerListNull}", 
+                requestId, billersResponse == null, billersResponse?.BillerList == null);
+            
+            if (billersResponse?.BillerList != null)
+            {
+                _logger.LogInformation("[BILLERLIST-{RequestId}] Count: {Count}, Categories count: {CategoriesCount}", 
+                    requestId, billersResponse.BillerList.Count, billersResponse.BillerList.Categories?.Count ?? 0);
+                
+                var category = billersResponse.BillerList.Categories?.FirstOrDefault();
+                if (category != null)
+                {
+                    _logger.LogInformation("[CATEGORY-{RequestId}] Found category Id: {CategoryId}, Name: {CategoryName}, Billers count: {BillersCount}", 
+                        requestId, category.Id, category.Name, category.Billers?.Count ?? 0);
+                    
+                    if (category.Billers?.Any() == true)
+                    {
+                        foreach (var biller in category.Billers)
+                        {
+                            _logger.LogInformation("[BILLER-{RequestId}] Id: {BillerId}, Name: {BillerName}, ShortName: {ShortName}", 
+                                requestId, biller.Id, biller.Name, biller.ShortName);
+                        }
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("[NO-CATEGORY-{RequestId}] No categories found in response", requestId);
+                }
+            }
+
+            var result = billersResponse?.BillerList?.Categories?.FirstOrDefault()?.Billers ?? new List<InterswitchBiller>();
+            _logger.LogInformation("[RESULT-{RequestId}] Returning {Count} billers", requestId, result.Count);
+            
+            return result;
         }
         catch (Exception ex)
         {

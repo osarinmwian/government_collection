@@ -2,6 +2,27 @@ using System.Text.Json.Serialization;
 
 namespace GovernmentCollections.Domain.DTOs.Interswitch;
 
+public class InterswitchPageFlowInfo
+{
+    [JsonPropertyName("Elements")]
+    public List<object> Elements { get; set; } = new();
+
+    [JsonPropertyName("FinishButtonName")]
+    public string FinishButtonName { get; set; } = string.Empty;
+
+    [JsonPropertyName("StartPage")]
+    public string StartPage { get; set; } = string.Empty;
+
+    [JsonPropertyName("UsesPaymentItems")]
+    public bool UsesPaymentItems { get; set; }
+
+    [JsonPropertyName("PerformInquiry")]
+    public bool PerformInquiry { get; set; }
+
+    [JsonPropertyName("AllowRetry")]
+    public bool AllowRetry { get; set; }
+}
+
 public class InterswitchAuthRequest
 {
     [JsonPropertyName("userName")]
@@ -43,8 +64,17 @@ public class InterswitchAuthResponse
 
 public class InterswitchBiller
 {
+    [JsonPropertyName("Type")]
+    public string? Type { get; set; }
+
     [JsonPropertyName("Id")]
     public int Id { get; set; }
+
+    [JsonPropertyName("PayDirectProductId")]
+    public int PayDirectProductId { get; set; }
+
+    [JsonPropertyName("PayDirectInstitutionId")]
+    public int PayDirectInstitutionId { get; set; }
 
     [JsonPropertyName("Name")]
     public string Name { get; set; } = string.Empty;
@@ -61,14 +91,29 @@ public class InterswitchBiller
     [JsonPropertyName("CustomerField2")]
     public string CustomerField2 { get; set; } = string.Empty;
 
+    [JsonPropertyName("LogoUrl")]
+    public string LogoUrl { get; set; } = string.Empty;
+
     [JsonPropertyName("Surcharge")]
     public string Surcharge { get; set; } = string.Empty;
+
+    [JsonPropertyName("CustomSectionUrl")]
+    public string CustomSectionUrl { get; set; } = string.Empty;
 
     [JsonPropertyName("CurrencyCode")]
     public string CurrencyCode { get; set; } = string.Empty;
 
     [JsonPropertyName("CurrencySymbol")]
     public string CurrencySymbol { get; set; } = string.Empty;
+
+    [JsonPropertyName("QuickTellerSiteUrlName")]
+    public string QuickTellerSiteUrlName { get; set; } = string.Empty;
+
+    [JsonPropertyName("SupportEmail")]
+    public string SupportEmail { get; set; } = string.Empty;
+
+    [JsonPropertyName("PageFlowInfo")]
+    public InterswitchPageFlowInfo? PageFlowInfo { get; set; }
 
     [JsonPropertyName("CategoryId")]
     public int CategoryId { get; set; }
